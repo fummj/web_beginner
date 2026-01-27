@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
+	"os"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -29,32 +30,43 @@ type Client struct {
 	address    string
 }
 
-func NewClient() *Client {
-	return &Client{}
+func NewClient(target, port, address string) *Client {
+	return &Client{
+		target:  target,
+		port:    port,
+		address: address,
+	}
 }
 
 // targetとportをstdInから受け付ける。
-func (c *Client) recvTargetInfo() {
+func recvTargetInfo() (string, string, string) {
 
-	// fmt.Println("waiting for your input(e.g. hostname port)...")
-	// scanner := bufio.NewScanner(os.Stdin)
-	// scanner.Scan()
-	//
-	// target, port, _ := strings.Cut(scanner.Text(), " ")
+	fmt.Println("waiting for your input(e.g. hostname port)...")
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
 
-	// c.target = target
-	// c.port = port
-	c.target = "127.0.0.1"
-	c.port = "8080"
-	c.address = fmt.Sprintf("%s:%s", c.target, c.port)
+	target, port, b := strings.Cut(scanner.Text(), " ")
+	if !b {
+		// test my-tcp-server
+		// target = "127.0.0.1"
+		// port = "8080"
 
-	fmt.Printf("set target=%s, port=%s \n", c.target, c.port)
+		// test google
+		target = "www.google.com"
+		port = "80"
+	}
+
+	address := fmt.Sprintf("%s:%s", target, port)
+
+	fmt.Printf("address: target=%s, port=%s \n", target, port)
+
+	return target, port, address
 }
 
 // ターゲットとポート番号のバリデーションのエントリ。
-func (c Client) validateInputArgs() error {
+func validateInputArgs(target, port string) error {
 	// hostname, ip-address, port
-	if err := c.validateTargetInfo(); err != nil {
+	if err := validateTargetInfo(target, port); err != nil {
 		return err
 	}
 
@@ -62,11 +74,11 @@ func (c Client) validateInputArgs() error {
 }
 
 // ターゲットとポート番号のバリデーション。
-func (c Client) validateTargetInfo() error {
+func validateTargetInfo(target, port string) error {
 	// hostname
-	if r, err := validate(matchHostNameString, c.target, nonEligibleEndpoint); !r {
+	if r, err := validate(matchHostNameString, target, nonEligibleEndpoint); !r {
 		// ip-address
-		r, err = validate(matchIPAddressString, c.target, nonEligibleEndpoint)
+		r, err = validate(matchIPAddressString, target, nonEligibleEndpoint)
 		if err != nil {
 			return err
 		}
@@ -75,7 +87,7 @@ func (c Client) validateTargetInfo() error {
 	}
 
 	// port
-	if _, err := validate(matchPortString, c.port, nonEligiblePortNumber); err != nil {
+	if _, err := validate(matchPortString, port, nonEligiblePortNumber); err != nil {
 		return err
 	}
 
@@ -96,7 +108,7 @@ func validate(m string, c string, e string) (bool, error) {
 func (c Client) connectTCPServer() error {
 	var (
 		requestLine        = "GET / HTTP/1.1"
-		requestHeader      = c.target
+		requestHeader      = fmt.Sprintf("Host: %s \r\nConnection: close", c.target)
 		httpRequestMessage = []byte(fmt.Sprint(requestLine, "\r\n", requestHeader, "\r\n", "\r\n"))
 	)
 	conn, err := net.Dial("tcp", c.address)
@@ -112,20 +124,24 @@ func (c Client) connectTCPServer() error {
 	}
 
 	conn.SetReadDeadline(time.Now().Add(time.Second * 5))
-	// ↓全て取得できたことを確認。
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		return err
+
+	slice := make([]byte, 1024)
+	var buffer []byte
+	var n int = 1
+
+	for n != 0 {
+		n, err = conn.Read(slice)
+		if err != nil {
+			if err == io.EOF {
+				fmt.Println("done!")
+				break
+			}
+			fmt.Println("can not read response error: ", err)
+			return err
+		}
+		buffer = append(buffer, slice[:n]...)
 	}
-	defer resp.Body.Close()
 
-	fmt.Println("resp: ", resp)
-	// ヘッダーやステータスを表示
-	fmt.Println("Status:", resp.Status)
-	fmt.Println("Headers:", resp.Header)
-
-	// ボディ（中身）を全て読み込む
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Println("Body:", string(body))
+	fmt.Println("response-content: ", string(buffer))
 	return nil
 }
