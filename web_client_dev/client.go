@@ -19,8 +19,8 @@ const (
 	matchIPAddressString = "[0-9]+.[0-9]+.[0-9]+"
 	matchPortString      = "^8080$"
 
-	nonEligiblePortNumber = "不適切なポート番号です。"
-	nonEligibleEndpoint   = "不適切な接続先名です。"
+	inEligiblePortNumber = "不適切なポート番号です。"
+	inEligibleTarget     = "不適切な接続先名です。"
 )
 
 type Client struct {
@@ -76,9 +76,9 @@ func validateInputArgs(target, port string) error {
 // ターゲットとポート番号のバリデーション。
 func validateTargetInfo(target, port string) error {
 	// hostname
-	if r, err := validate(matchHostNameString, target, nonEligibleEndpoint); !r {
+	if r, err := validate(matchHostNameString, target, inEligibleTarget); !r {
 		// ip-address
-		r, err = validate(matchIPAddressString, target, nonEligibleEndpoint)
+		r, err = validate(matchIPAddressString, target, inEligibleTarget)
 		if err != nil {
 			return err
 		}
@@ -87,7 +87,7 @@ func validateTargetInfo(target, port string) error {
 	}
 
 	// port
-	if _, err := validate(matchPortString, port, nonEligiblePortNumber); err != nil {
+	if _, err := validate(matchPortString, port, inEligiblePortNumber); err != nil {
 		return err
 	}
 
