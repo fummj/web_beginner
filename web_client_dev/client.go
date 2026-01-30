@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,67 @@ func NewClient(target, port, address string) *Client {
 		port:    port,
 		address: address,
 	}
+}
+
+type Response struct {
+	rawContent []byte
+	_status    string
+	_header    string
+	_body      string
+}
+
+func NewResponse(buffer []byte) *Response {
+	return &Response{rawContent: buffer}
+}
+
+// HTTPステータスラインを取得する。すでに持っていればその値を返す。
+func (resp *Response) Status() string {
+	if resp._status != "" {
+		return resp._status
+	}
+
+	// rawContentからstatusの内容を取得する。
+	i := bytes.Index(resp.rawContent, []byte("\r\n"))
+	resp._status = string(resp.rawContent[:i])
+
+	fmt.Println(resp._status)
+	return resp._status
+}
+
+// HTTPレスポンスヘッダーを取得する。すでに持っていればその値を返す。
+func (resp *Response) Header() string {
+	if resp._header != "" {
+		return resp._header
+	}
+
+	// rawContentからheaderの内容を取得する。
+	i := bytes.Index(resp.rawContent, []byte("\r\n"))     // heaaderとstatusの境目
+	j := bytes.Index(resp.rawContent, []byte("\r\n\r\n")) // headerとbodyの境目
+	resp._header = string(resp.rawContent[i:j])
+
+	fmt.Println(resp._header)
+	return resp._header
+}
+
+// HTTPレスポンスボディを取得する。すでに持っていればその値を返す。
+func (resp *Response) Body() string {
+	if resp._body != "" {
+		return resp._body
+	}
+
+	// rawContentからbodyの内容を取得する。
+	i := bytes.Index(resp.rawContent, []byte("\r\n\r\n")) // headerとbodyの境目
+	rawBody := resp.rawContent[i:]
+
+	crlf := []byte("\r\n")
+	rawBody = bytes.Trim(rawBody, string(crlf))
+	j := bytes.Index(rawBody, crlf) + len(crlf) + 1 // chunke-sizeの境目
+
+	k := bytes.LastIndex(rawBody, crlf) // 末尾の0との境目
+	resp._body = string(rawBody[j:k])
+
+	fmt.Println(resp._body)
+	return resp._body
 }
 
 // targetとportをstdInから受け付ける。
@@ -105,7 +167,7 @@ func validate(m string, c string, e string) (bool, error) {
 	return r, nil
 }
 
-func (c Client) connectTCPServer() error {
+func (c Client) connectTCPServer() ([]byte, error) {
 	var (
 		requestLine        = "GET / HTTP/1.1"
 		requestHeader      = fmt.Sprintf("Host: %s \r\nConnection: close", c.target)
@@ -113,14 +175,14 @@ func (c Client) connectTCPServer() error {
 	)
 	conn, err := net.Dial("tcp", c.address)
 	if err != nil {
-		return err
+		return []byte{}, err
 	}
 
 	defer conn.Close()
 
 	_, err = conn.Write(httpRequestMessage)
 	if err != nil {
-		return err
+		return []byte{}, err
 	}
 
 	conn.SetReadDeadline(time.Now().Add(time.Second * 5))
@@ -137,11 +199,11 @@ func (c Client) connectTCPServer() error {
 				break
 			}
 			fmt.Println("can not read response error: ", err)
-			return err
+			return []byte{}, err
 		}
 		buffer = append(buffer, slice[:n]...)
 	}
 
-	fmt.Println("response-content: ", string(buffer))
-	return nil
+	// fmt.Println("response-content: ", string(buffer))
+	return buffer, nil
 }
