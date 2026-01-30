@@ -1,9 +1,23 @@
 package main
 
+import (
+	"fmt"
+	"os"
+)
+
 func main() {
 	t, p, a := recvTargetInfo()
 	client := NewClient(t, p, a)
 
-	// TODO: 是が非でもresponseから自力でデータを取得したい。
-	client.connectTCPServer()
+	b, err := client.connectTCPServer()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	resp := NewResponse(b)
+	// resp.Status()
+	// resp.Header()
+	resp.Body()
+
 }
