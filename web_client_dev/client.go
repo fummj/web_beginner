@@ -1,20 +1,17 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"regexp"
-	"strings"
 	"time"
 )
 
 const (
 	httpPortNum = 8080
+	crlf        = "\r\n"
 
 	matchHostNameString  = "\\.[a-z]+$"
 	matchIPAddressString = "[0-9]+.[0-9]+.[0-9]+"
@@ -24,18 +21,19 @@ const (
 	inEligibleTarget     = "不適切な接続先名です。"
 )
 
-type Client struct {
+type HTTPClient struct {
 	target     string
 	port       string
 	httpMethod string
 	address    string
+	conn       net.Conn
 }
 
-func NewClient(target, port, address string) *Client {
-	return &Client{
+func NewHTTPClient(target, port string) *HTTPClient {
+	return &HTTPClient{
 		target:  target,
 		port:    port,
-		address: address,
+		address: fmt.Sprintf("%s:%s", target, port),
 	}
 }
 
@@ -47,7 +45,16 @@ type Response struct {
 }
 
 func NewResponse(buffer []byte) *Response {
-	return &Response{rawContent: buffer}
+	r := &Response{rawContent: buffer}
+	r._extractMsg()
+	return r
+}
+
+// status-line, header, bodyの値をフィールドに入れる。
+func (resp *Response) _extractMsg() {
+	resp.Status()
+	resp.Header()
+	resp.Body()
 }
 
 // HTTPステータスラインを取得する。すでに持っていればその値を返す。
@@ -57,10 +64,9 @@ func (resp *Response) Status() string {
 	}
 
 	// rawContentからstatusの内容を取得する。
-	i := bytes.Index(resp.rawContent, []byte("\r\n"))
+	i := bytes.Index(resp.rawContent, []byte(crlf))
 	resp._status = string(resp.rawContent[:i])
 
-	fmt.Println(resp._status)
 	return resp._status
 }
 
@@ -71,11 +77,10 @@ func (resp *Response) Header() string {
 	}
 
 	// rawContentからheaderの内容を取得する。
-	i := bytes.Index(resp.rawContent, []byte("\r\n"))     // heaaderとstatusの境目
-	j := bytes.Index(resp.rawContent, []byte("\r\n\r\n")) // headerとbodyの境目
+	i := bytes.Index(resp.rawContent, []byte(crlf)) + len(crlf) // heaaderとstatusの境目
+	j := bytes.Index(resp.rawContent, []byte(crlf+crlf))        // headerとbodyの境目
 	resp._header = string(resp.rawContent[i:j])
 
-	fmt.Println(resp._header)
 	return resp._header
 }
 
@@ -86,7 +91,7 @@ func (resp *Response) Body() string {
 	}
 
 	// rawContentからbodyの内容を取得する。
-	i := bytes.Index(resp.rawContent, []byte("\r\n\r\n")) // headerとbodyの境目
+	i := bytes.Index(resp.rawContent, []byte(crlf+crlf)) // headerとbodyの境目
 	rawBody := resp.rawContent[i:]
 
 	crlf := []byte("\r\n")
@@ -96,114 +101,92 @@ func (resp *Response) Body() string {
 	k := bytes.LastIndex(rawBody, crlf) // 末尾の0との境目
 	resp._body = string(rawBody[j:k])
 
-	fmt.Println(resp._body)
+	// TODO: chuke-sizeも抽出予定
 	return resp._body
 }
 
-// targetとportをstdInから受け付ける。
-func recvTargetInfo() (string, string, string) {
+// HTTPレスポンスメッセージを受け取り、その内容をResponse構造体に含めて返す。
+func (c HTTPClient) getHTTPResponse() (*Response, error) {
 
-	fmt.Println("waiting for your input(e.g. hostname port)...")
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Scan()
-
-	target, port, b := strings.Cut(scanner.Text(), " ")
-	if !b {
-		// test my-tcp-server
-		// target = "127.0.0.1"
-		// port = "8080"
-
-		// test google
-		target = "www.google.com"
-		port = "80"
+	err := c.sendHTTPRequest()
+	if err != nil {
+		return nil, err
 	}
 
-	address := fmt.Sprintf("%s:%s", target, port)
+	rawResponse, err := c.readAllHTTPResponse()
+	if err != nil {
+		return nil, err
+	}
 
-	fmt.Printf("address: target=%s, port=%s \n", target, port)
-
-	return target, port, address
+	resp := NewResponse(rawResponse)
+	return resp, err
 }
 
-// ターゲットとポート番号のバリデーションのエントリ。
-func validateInputArgs(target, port string) error {
-	// hostname, ip-address, port
-	if err := validateTargetInfo(target, port); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// ターゲットとポート番号のバリデーション。
-func validateTargetInfo(target, port string) error {
-	// hostname
-	if r, err := validate(matchHostNameString, target, inEligibleTarget); !r {
-		// ip-address
-		r, err = validate(matchIPAddressString, target, inEligibleTarget)
-		if err != nil {
-			return err
-		}
-	} else if err != nil {
-		return err
-	}
-
-	// port
-	if _, err := validate(matchPortString, port, inEligiblePortNumber); err != nil {
-		return err
-	}
-
-	return nil
-
-}
-func validate(m string, c string, e string) (bool, error) {
-	r, err := regexp.MatchString(m, c)
-	if !r {
-		return r, errors.New(e)
-	} else if err != nil {
-		return r, err
-	}
-
-	return r, nil
-}
-
-func (c Client) connectTCPServer() ([]byte, error) {
-	var (
-		requestLine        = "GET / HTTP/1.1"
-		requestHeader      = fmt.Sprintf("Host: %s \r\nConnection: close", c.target)
-		httpRequestMessage = []byte(fmt.Sprint(requestLine, "\r\n", requestHeader, "\r\n", "\r\n"))
-	)
+// TCPでの接続を行う。
+func (c *HTTPClient) _connect() error {
 	conn, err := net.Dial("tcp", c.address)
 	if err != nil {
-		return []byte{}, err
+		return err
 	}
 
-	defer conn.Close()
+	c.conn = conn
+	return nil
+}
 
-	_, err = conn.Write(httpRequestMessage)
+// TCPでメッセージを送る。
+func (c *HTTPClient) _write(msg []byte) error {
+	_, err := c.conn.Write(msg)
 	if err != nil {
-		return []byte{}, err
+		return err
 	}
 
-	conn.SetReadDeadline(time.Now().Add(time.Second * 5))
+	return nil
+}
+
+// HTTP version 1.1
+// HTTPリクエストを投げる。
+func (c *HTTPClient) sendHTTPRequest() error {
+	var (
+		// とりあえずhttpメソッドは固定。今後変更予定。
+		requestLine        = "GET / HTTP/1.1"
+		requestHeader      = fmt.Sprintf("Host: %s \r\nConnection: close", c.target)
+		httpRequestMessage = []byte(fmt.Sprint(requestLine, crlf, requestHeader, crlf, crlf))
+	)
+
+	if err := c._connect(); err != nil {
+		fmt.Printf("can not connect to target(%s) error: %s \n", c.target, err)
+		// TODO: どの箇所でエラーが生じたのかがわかるようにする。
+		os.Exit(1)
+	}
+
+	err := c._write(httpRequestMessage)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// 受け取ったHTTPレスポンスメッセージの内容を全て読みとる。
+func (c HTTPClient) readAllHTTPResponse() ([]byte, error) {
+	c.conn.SetReadDeadline(time.Now().Add(time.Second * 5))
 
 	slice := make([]byte, 1024)
 	var buffer []byte
 	var n int = 1
 
 	for n != 0 {
-		n, err = conn.Read(slice)
+		n, err := c.conn.Read(slice)
 		if err != nil {
 			if err == io.EOF {
 				fmt.Println("done!")
 				break
 			}
 			fmt.Println("can not read response error: ", err)
-			return []byte{}, err
+			return buffer, err
 		}
 		buffer = append(buffer, slice[:n]...)
 	}
 
-	// fmt.Println("response-content: ", string(buffer))
 	return buffer, nil
 }
