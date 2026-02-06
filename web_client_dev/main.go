@@ -6,18 +6,16 @@ import (
 )
 
 func main() {
-	t, p, a := recvTargetInfo()
-	client := NewClient(t, p, a)
+	t, p := recvTargetInfo()
+	client := NewHTTPClient(t, p)
 
-	b, err := client.connectTCPServer()
+	resp, err := client.getHTTPResponse()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
 
-	resp := NewResponse(b)
-	// resp.Status()
-	// resp.Header()
-	resp.Body()
-
+	fmt.Println(resp.Status(), "\n#########")
+	fmt.Println(resp.Header(), "\n#########")
+	fmt.Println(resp.Body(), "\n#########")
 }
