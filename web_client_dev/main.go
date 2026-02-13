@@ -15,7 +15,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println(resp.Status(), "\n#########")
-	fmt.Println(resp.Header(), "\n#########")
-	fmt.Println(resp.Body(), "\n#########")
+	resp.Status()
+	// fmt.Println(resp.Status(), "\n#########")
+	// fmt.Println(resp.Header(), "\n#########")
+	// fmt.Println(resp.Body(), "\n#########")
+
+	myTerminal := NewAlternateBuffer()
+	myTerminal.Enter()
 }
