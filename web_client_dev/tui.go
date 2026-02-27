@@ -8,11 +8,56 @@ import (
 	"golang.org/x/term"
 )
 
+const (
+	EnterESC = "\x1b[?1049h"
+	ExitESC  = "\x1b[?1049l"
+	Theme    = "\x1b[41m"
+
+	Reset        = "\x1b[0m"
+	StrGreen     = "\x1b[38;2;50;205;50m"
+	StrRed       = "\x1b[31m"
+	BgRed        = "\x1b[41m"
+	BgBlue       = "\x1b[42m"
+	BgBlack      = "\x1b[48;2;0;0;0m"
+	BgDeepPurple = "\x1b[48;2;55;0;175m"
+	BgColor      = "\x1b[49m"
+	Home         = "\x1b[H"
+	Clear        = "\x1b[H\x1b[2J"
+	ClearText    = "\x1b[2J"
+	HideCs       = "\x1b[?25l"
+	ShowCs       = "\x1b[?25h"
+
+	Blink = "\x1b[5m"
+
+	CursorUpESC    = "\x1b[1A"
+	CursorDownESC  = "\x1b[1B"
+	CursorRightESC = "\x1b[1C"
+	CursorLeftESC  = "\x1b[1D"
+
+	Tab       uint8 = 9
+	Enter     uint8 = 13
+	Backspace uint8 = 127
+	CtrlH     uint8 = 8
+	CtrlU     uint8 = 21
+)
+
+type RequestContent struct {
+	requestLine string
+
+	requestHeaderHost        string
+	requestHeaderContentType string
+	requestBody              string
+}
+
 type AlternateBuffer struct {
-	fd            int
-	OldState      *term.State
-	width, height int
-	t             *term.Terminal
+	fd                            int
+	OldState                      *term.State
+	width, height, vPoint, hPoint int
+	t                             *term.Terminal
+	rw                            *TerminalReadWriter
+	tuiText                       string
+	tabCount                      int
+	rc                            *RequestContent
 }
 
 func NewAlternateBuffer() *AlternateBuffer {
@@ -35,12 +80,16 @@ func NewAlternateBuffer() *AlternateBuffer {
 		os.Exit(1)
 	}
 
+	t, rw := NewTerminal(w, h)
+
 	return &AlternateBuffer{
 		fd:       fd,
 		OldState: OldState,
 		width:    w,
 		height:   h,
-		t:        NewTerminal(w, h),
+		t:        t,
+		rw:       rw,
+		rc:       &RequestContent{},
 	}
 }
 
@@ -53,19 +102,19 @@ func NewTerminalReadWriter() *TerminalReadWriter {
 	return &TerminalReadWriter{os.Stdin, os.Stdout}
 }
 
-func NewTerminal(w, h int) *term.Terminal {
+func NewTerminal(w, h int) (*term.Terminal, *TerminalReadWriter) {
 	rw := NewTerminalReadWriter()
-	t := term.NewTerminal(rw, blink)
+	t := term.NewTerminal(rw, Blink)
 
 	t.SetSize(w, h)
-	return t
+	return t, rw
 }
 
-func (ab AlternateBuffer) Enter() {
+func (ab *AlternateBuffer) Enter() {
 
-	ab.t.Write([]byte(enterESC))
-	ab.t.Write([]byte(StrGreen))
-	ab.t.Write([]byte(BgColor))
+	ab.t.Write([]byte(EnterESC))
+	ab.t.Write([]byte(StrRed))
+	ab.t.Write([]byte(BgBlack))
 	ab.t.Write([]byte(Clear))
 
 	ab.DrawTUI()
@@ -73,83 +122,275 @@ func (ab AlternateBuffer) Enter() {
 	defer ab.Restore()
 }
 
-func (ab AlternateBuffer) DrawTUI() {
-	var (
-		startVPoint int = ab.height / 4
-		startHPoint int = int(float32(ab.width) / 3.3)
+func (ab *AlternateBuffer) DrawTUI() {
+	ab.vPoint = ab.height / 4
+	ab.hPoint = int(float32(ab.width) / 3.3)
+
+	ab.tuiText = fmt.Sprint(
+		"\x1b[", ab.vPoint+1, ";", ab.hPoint, "H", "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ HTTP REQUEST MESSAGE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+		"\x1b[", ab.vPoint+2, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+3, ";", ab.hPoint, "H", "┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ REQUEST LINE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫",
+		"\x1b[", ab.vPoint+4, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+5, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+6, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+7, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+8, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+6, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+7, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+8, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+9, ";", ab.hPoint, "H", "┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ REQUEST HEADER ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫",
+		"\x1b[", ab.vPoint+10, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+11, ";", ab.hPoint, "H", "┃ Host:                                                                                          ┃",
+		"\x1b[", ab.vPoint+12, ";", ab.hPoint, "H", "┃ Content-type:                                                                                  ┃",
+		"\x1b[", ab.vPoint+13, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+14, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+15, ";", ab.hPoint, "H", "┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ REQUEST BODY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫",
+		"\x1b[", ab.vPoint+16, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+17, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+18, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+19, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+20, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+21, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+22, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+23, ";", ab.hPoint, "H", "┃                                                                                                ┃",
+		"\x1b[", ab.vPoint+24, ";", ab.hPoint, "H", "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
+		"\x1b[", ab.vPoint+25, ";", ab.hPoint, "H", "                                                                                                  ",
+		"\x1b[", ab.vPoint+26, ";", ab.hPoint, "H", "                             ++++++++++++                xxxxxxxxxxxx                             ",
+		"\x1b[", ab.vPoint+27, ";", ab.hPoint, "H", "                             +   SEND   +                x  CANCEL  x                             ",
+		"\x1b[", ab.vPoint+28, ";", ab.hPoint, "H", "                             ++++++++++++                xxxxxxxxxxxx                             ",
 	)
+	fmt.Print(ab.tuiText)
 
-	// wrttin.in/tokyoにcurlを飛ばした際に表示されるような、線にしたい。点線ではなく。やり方わからぬ
-	fmt.Print("\x1b[", startVPoint+1, ";", startHPoint, "H", "+------------------------------------ HTTP REQUEST MESSAGE --------------------------------------+")
-	fmt.Print("\x1b[", startVPoint+2, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+3, ";", startHPoint, "H", "+----------------------------------------- REQUEST LINE -----------------------------------------+")
-	fmt.Print("\x1b[", startVPoint+4, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+5, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+6, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+7, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+8, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+9, ";", startHPoint, "H", "+---------------------------------------- REQUEST HEADER ----------------------------------------+")
-	fmt.Print("\x1b[", startVPoint+10, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+11, ";", startHPoint, "H", "| Host:                                                                                          |")
-	fmt.Print("\x1b[", startVPoint+12, ";", startHPoint, "H", "| Content-type:                                                                                  |")
-	fmt.Print("\x1b[", startVPoint+13, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+14, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+15, ";", startHPoint, "H", "+----------------------------------------- REQUEST BODY -----------------------------------------+")
-	fmt.Print("\x1b[", startVPoint+16, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+17, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+18, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+19, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+20, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+21, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+22, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+23, ";", startHPoint, "H", "|                                                                                                |")
-	fmt.Print("\x1b[", startVPoint+24, ";", startHPoint, "H", "+------------------------------------------------------------------------------------------------+")
-	fmt.Print("\x1b[", startVPoint+25, ";", startHPoint, "H", "                                                                                                  ")
-	fmt.Print("\x1b[", startVPoint+26, ";", startHPoint, "H", "                             ++++++++++++                xxxxxxxxxxxx                             ")
-	fmt.Print("\x1b[", startVPoint+27, ";", startHPoint, "H", "                             +   SEND   +                x  CANCEL  x                             ")
-	fmt.Print("\x1b[", startVPoint+28, ";", startHPoint, "H", "                             ++++++++++++                xxxxxxxxxxxx                             ")
-
-	ab.InputRequestContent(startVPoint, startHPoint)
-
-	// time.Sleep(time.Second * 1 / 2)
+	ab.InputRequestContent(ab.vPoint, ab.hPoint)
 }
 
-func (ab AlternateBuffer) InputRequestContent(vPoint, hPoint int) {
-	var (
-		requestLineVPoint                  int = vPoint + 5
-		requestLineAndHeaderHPoint         int = hPoint + 17
-		requestHeaderHostVPoint            int = requestLineVPoint + 5
-		requestHeaderContentTypeHostVPoint int = requestHeaderHostVPoint + 1
-		requestBodyVPoint                  int = requestHeaderContentTypeHostVPoint + 5
-		requestBodyHPoint                  int = hPoint + 1
-	)
-
-	ab._inputRequestContent(requestLineVPoint, requestLineAndHeaderHPoint)
-	ab._inputRequestContent(requestHeaderHostVPoint, requestLineAndHeaderHPoint)
-	ab._inputRequestContent(requestHeaderContentTypeHostVPoint, requestLineAndHeaderHPoint)
-	ab._inputRequestContent(requestBodyVPoint, requestBodyHPoint)
+func (ab AlternateBuffer) RenderingRequestLine() {
+	ab.moveCursorRequestLine()
+	fmt.Print(ab.rc.requestLine)
 }
 
-func (ab AlternateBuffer) _inputRequestContent(vPoint, hPoint int) {
-	// カーソル移動(初期位置)
+func (ab AlternateBuffer) RenderingRequestHeaderHost() {
+	ab.moveCursorRequestHeaderHost()
+	fmt.Print(ab.rc.requestHeaderHost)
+}
+
+func (ab AlternateBuffer) RenderingRequestHeaderContentType() {
+	ab.moveCursorRequestHeaderContentType()
+	fmt.Print(ab.rc.requestHeaderContentType)
+}
+
+func (ab AlternateBuffer) RenderingRequestBody() {
+	ab.moveCursorRequestBody()
+	fmt.Print(ab.rc.requestBody)
+}
+
+func (ab *AlternateBuffer) InputRequestContent(vPoint, hPoint int) {
+	ab.InputRequestLine()
+	ab.InputRequestHeaderHost()
+	ab.InputRequestHeaderContentType()
+	ab.InputRequestBody()
+}
+
+func (ab *AlternateBuffer) InputRequestLine() {
+	ab.moveCursorRequestLine()
+	ab.ReadLine()
+}
+
+func (ab *AlternateBuffer) InputRequestHeaderHost() {
+	ab.moveCursorRequestHeaderHost()
+	ab.ReadLine()
+}
+
+func (ab *AlternateBuffer) InputRequestHeaderContentType() {
+	ab.moveCursorRequestHeaderContentType()
+	ab.ReadLine()
+}
+
+func (ab *AlternateBuffer) InputRequestBody() {
+	ab.moveCursorRequestBody()
+	ab.ReadLine()
+}
+
+func (ab AlternateBuffer) MoveCursorRequestContent() {
+	if ab.tabCount == 0 {
+		ab.moveCursorRequestLine()
+	}
+
+	if ab.tabCount == 1 {
+		ab.RenderingRequestLine()
+		ab.moveCursorRequestHeaderHost()
+	}
+
+	if ab.tabCount == 2 {
+		ab.RenderingRequestLine()
+		ab.RenderingRequestHeaderHost()
+		ab.moveCursorRequestHeaderContentType()
+	}
+
+	if ab.tabCount == 3 {
+		ab.RenderingRequestLine()
+		ab.RenderingRequestHeaderHost()
+		ab.RenderingRequestHeaderContentType()
+		ab.moveCursorRequestBody()
+	}
+}
+
+func (ab AlternateBuffer) moveCursorRequestLine() {
+	v := ab.vPoint + 5
+	h := ab.hPoint + 17
+
+	ab.moveCursor(v, h)
+}
+
+func (ab AlternateBuffer) moveCursorRequestHeaderHost() {
+	v := ab.vPoint + 10
+	h := ab.hPoint + 17
+
+	ab.moveCursor(v, h)
+}
+
+func (ab AlternateBuffer) moveCursorRequestHeaderContentType() {
+	v := ab.vPoint + 11
+	h := ab.hPoint + 17
+
+	ab.moveCursor(v, h)
+}
+
+func (ab AlternateBuffer) moveCursorRequestBody() {
+	v := ab.vPoint + 16
+	h := ab.hPoint + 1
+
+	ab.moveCursor(v, h)
+}
+
+func (ab AlternateBuffer) moveCursor(vPoint, hPoint int) {
 	ab.t.Write([]byte(Home))
 
 	for i := 0; i < vPoint; i++ {
-		ab.t.Write([]byte(cursorDownESC))
+		ab.t.Write([]byte(CursorDownESC))
 	}
 
 	for i := 0; i < hPoint; i++ {
-		ab.t.Write([]byte(cursorRightESC))
-	}
-
-	_, err := ab.t.ReadLine()
-	if err != nil {
-		os.Exit(1)
+		ab.t.Write([]byte(CursorRightESC))
 	}
 }
 
-func (ab AlternateBuffer) verifyInputKey() {
-	// TODO: 標準入力から1バイトずつキーを取得したい。
+func (ab AlternateBuffer) _inputRequestField(buffer *[]byte) {
+	if ab.tabCount == 0 {
+		ab.rc.requestLine = string(*buffer)
+	}
+
+	if ab.tabCount == 1 {
+		ab.rc.requestHeaderHost = string(*buffer)
+	}
+
+	if ab.tabCount == 2 {
+		ab.rc.requestHeaderContentType = string(*buffer)
+	}
+
+	if ab.tabCount == 3 {
+		ab.rc.requestBody = string(*buffer)
+	}
+}
+
+func (ab AlternateBuffer) RenderingRequestContent(esc uint8, buffer *[]byte) {
+	ab.MoveCursorRequestContent()
+	ab._renderingBuffer(esc, buffer)
+
+	if ab.tabCount == 0 {
+		ab.rc.requestLine = string(*buffer)
+		ab.RenderingRequestLine()
+	}
+
+	if ab.tabCount == 1 {
+		ab.rc.requestHeaderHost = string(*buffer)
+		ab.RenderingRequestLine()
+		ab.RenderingRequestHeaderHost()
+	}
+
+	if ab.tabCount == 2 {
+		ab.rc.requestHeaderContentType = string(*buffer)
+		ab.RenderingRequestLine()
+		ab.RenderingRequestHeaderHost()
+		ab.RenderingRequestHeaderContentType()
+	}
+
+	if ab.tabCount == 3 {
+		ab.rc.requestBody = string(*buffer)
+		ab.RenderingRequestLine()
+		ab.RenderingRequestHeaderHost()
+		ab.RenderingRequestHeaderContentType()
+		ab.RenderingRequestBody()
+	}
+}
+
+// TUIテキストを再レンダリングする
+func (ab AlternateBuffer) _reRenderingTUIText() {
+	fmt.Print(Clear)
+	fmt.Print(ab.tuiText)
+
+}
+
+func (ab *AlternateBuffer) ReadLine() {
+	bff := make([]byte, 1)
+	r := make([]byte, 1)
+
+	for {
+		i, err := ab.rw.Read(r)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		esc := r[0]
+		if i == 0 || esc == Tab {
+			if esc == Tab {
+				ab.tabCount += 1
+				break
+			}
+			break
+		}
+
+		if esc == Enter {
+			continue
+		}
+
+		ab._reRenderingTUIText()
+		ab.RenderingRequestContent(esc, &bff)
+	}
+}
+
+func (ab *AlternateBuffer) _renderingBuffer(esc uint8, buffer *[]byte) {
+	if esc == Backspace || esc == CtrlH || esc == CtrlU {
+		ab.rw.remover(esc, buffer)
+		ab._inputRequestField(buffer)
+	} else {
+		ab.rw.adder(esc, buffer)
+		ab._inputRequestField(buffer)
+	}
+}
+
+func (rw TerminalReadWriter) remover(esc uint8, buffer *[]byte) {
+	// FIX: まずbufferのlenを確認する必要がある。
+	if esc == Backspace || esc == CtrlH {
+		rw._remover(buffer)
+		return
+	}
+
+	if esc == CtrlU {
+		for i := 0; i < len(*buffer); i++ {
+			rw._remover(buffer)
+		}
+		return
+	}
+}
+
+func (rw TerminalReadWriter) _remover(buffer *[]byte) {
+	*buffer = (*buffer)[:len(*buffer)-1]
+}
+
+func (rw TerminalReadWriter) adder(esc uint8, buffer *[]byte) {
+	*buffer = append(*buffer, esc)
 }
 
 func (ab AlternateBuffer) Restore() {
@@ -159,5 +400,5 @@ func (ab AlternateBuffer) Restore() {
 		os.Exit(1)
 	}
 
-	os.Stdout.Write([]byte(exitESC))
+	os.Stdout.Write([]byte(ExitESC))
 }
