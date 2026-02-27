@@ -9,30 +9,6 @@ import (
 	"strings"
 )
 
-const (
-	enterESC = "\x1b[?1049h"
-	exitESC  = "\x1b[?1049l"
-	theme    = "\x1b[41m"
-
-	Reset    = "\x1b[0m"
-	StrGreen = "\x1b[38;2;50;205;50m"
-	BgRed    = "\x1b[41m"
-	BgBlue   = "\x1b[42m"
-	// BgDeepPurple = "\x1b[48;2;75;0;175m"
-	BgColor = "\x1b[49m"
-	Home    = "\x1b[H"
-	Clear   = "\x1b[H\x1b[2J"
-	HideCs  = "\x1b[?25l"
-	ShowCs  = "\x1b[?25h"
-
-	blink = "\x1b[5m"
-
-	cursorUpESC    = "\x1b[1A"
-	cursorDownESC  = "\x1b[1B"
-	cursorRightESC = "\x1b[1C"
-	cursorLeftESC  = "\x1b[1D"
-)
-
 // targetとportをstdInから受け付ける。
 func recvTargetInfo() (string, string) {
 
