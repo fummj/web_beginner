@@ -115,6 +115,8 @@ func (ab *AlternateBuffer) DrawTUI() {
 	ab.vPoint = ab.height / 4
 	ab.hPoint = int(float32(ab.width) / 3.3)
 
+	// TODO: 分割して関数で文字列を構築できるようにする。
+	// TODO: 枠と文字を色を変える。
 	ab.tuiText = fmt.Sprint(
 		"\x1b[", ab.vPoint+1, ";", ab.hPoint, "H", "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ HTTP REQUEST MESSAGE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
 		"\x1b[", ab.vPoint+2, ";", ab.hPoint, "H", "┃                                                                                                ┃",
@@ -144,14 +146,36 @@ func (ab *AlternateBuffer) DrawTUI() {
 		"\x1b[", ab.vPoint+23, ";", ab.hPoint, "H", "┃                                                                                                ┃",
 		"\x1b[", ab.vPoint+24, ";", ab.hPoint, "H", "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
 		"\x1b[", ab.vPoint+25, ";", ab.hPoint, "H", "                                                                                                  ",
-		"\x1b[", ab.vPoint+26, ";", ab.hPoint, "H", "                             ++++++++++++                xxxxxxxxxxxx                             ",
+		"\x1b[", ab.vPoint+26, ";", ab.hPoint, "H", "                                                                                                  ",
 		"\x1b[", ab.vPoint+27, ";", ab.hPoint, "H", "                             +   SEND   +                x  CANCEL  x                             ",
-		"\x1b[", ab.vPoint+28, ";", ab.hPoint, "H", "                             ++++++++++++                xxxxxxxxxxxx                             ",
 	)
 	fmt.Print(ab.tuiText)
 
 	ab.InputRequestContent(ab.vPoint, ab.hPoint)
 	ab.ReadEnter()
+}
+
+func (ab AlternateBuffer) resetInverseSendAndCancel() {
+	ab._resetInverseSend()
+	ab._resetInverseCancel()
+}
+
+func (ab AlternateBuffer) _resetInverseSend() {
+	ab._moveCursorSend()
+	fmt.Print("\x1b[27mSEND")
+}
+
+func (ab AlternateBuffer) _resetInverseCancel() {
+	ab._moveCursorCancel()
+	fmt.Print("\x1b[27mCANCEL")
+}
+
+func (ab AlternateBuffer) _visibleCursor() {
+	fmt.Print("\x1b[?25h")
+}
+
+func (ab AlternateBuffer) _hiddenCursor() {
+	fmt.Print("\x1b[?25l")
 }
 
 func (ab AlternateBuffer) RenderingRequestLine() {
@@ -175,6 +199,7 @@ func (ab AlternateBuffer) RenderingRequestBody() {
 }
 
 func (ab *AlternateBuffer) InputRequestContent(vPoint, hPoint int) {
+	ab._visibleCursor()
 	ab.InputRequestLine()
 	ab.InputRequestHeaderHost()
 	ab.InputRequestHeaderContentType()
@@ -253,15 +278,19 @@ func (ab AlternateBuffer) moveCursorRequestBody() {
 	ab.moveCursor(v, h)
 }
 
-func (ab AlternateBuffer) moveCursorSaveOrCancel() {
+func (ab AlternateBuffer) moveCursorSendOrCancel() {
+	ab._hiddenCursor()
+	ab.resetInverseSendAndCancel()
 	if ab.scs == true {
-		ab._moveCursorSave()
+		ab._moveCursorSend()
+		fmt.Print("\x1b[7mSEND")
 	} else {
 		ab._moveCursorCancel()
+		fmt.Print("\x1b[7mCANCEL")
 	}
 }
 
-func (ab AlternateBuffer) _moveCursorSave() {
+func (ab AlternateBuffer) _moveCursorSend() {
 	v := ab.vPoint + 26
 	h := ab.hPoint + 32
 
@@ -354,7 +383,7 @@ func (ab AlternateBuffer) _reRenderingTUIText() {
 }
 
 func (ab *AlternateBuffer) ReadEnter() {
-	ab.moveCursorSaveOrCancel()
+	ab.moveCursorSendOrCancel()
 
 	r := make([]byte, 1)
 	for {
@@ -371,7 +400,7 @@ func (ab *AlternateBuffer) ReadEnter() {
 		esc := r[0]
 		if esc == Tab {
 			ab.scs = !ab.scs
-			ab.moveCursorSaveOrCancel()
+			ab.moveCursorSendOrCancel()
 		}
 
 		if esc == Enter {
