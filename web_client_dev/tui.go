@@ -11,28 +11,16 @@ import (
 const (
 	EnterESC = "\x1b[?1049h"
 	ExitESC  = "\x1b[?1049l"
-	Theme    = "\x1b[41m"
 
-	Reset        = "\x1b[0m"
-	StrGreen     = "\x1b[38;2;50;205;50m"
-	StrRed       = "\x1b[31m"
-	BgRed        = "\x1b[41m"
-	BgBlue       = "\x1b[42m"
-	BgBlack      = "\x1b[48;2;0;0;0m"
-	BgDeepPurple = "\x1b[48;2;55;0;175m"
-	BgColor      = "\x1b[49m"
-	Home         = "\x1b[H"
-	Clear        = "\x1b[H\x1b[2J"
-	ClearText    = "\x1b[2J"
-	HideCs       = "\x1b[?25l"
-	ShowCs       = "\x1b[?25h"
+	StrRed  = "\x1b[31m"
+	BgBlack = "\x1b[48;2;0;0;0m"
+	Home    = "\x1b[H"
+	Clear   = "\x1b[H\x1b[2J"
 
 	Blink = "\x1b[5m"
 
-	CursorUpESC    = "\x1b[1A"
 	CursorDownESC  = "\x1b[1B"
 	CursorRightESC = "\x1b[1C"
-	CursorLeftESC  = "\x1b[1D"
 
 	Tab       uint8 = 9
 	Enter     uint8 = 13
@@ -42,8 +30,7 @@ const (
 )
 
 type RequestContent struct {
-	requestLine string
-
+	requestLine              string
 	requestHeaderHost        string
 	requestHeaderContentType string
 	requestBody              string
@@ -58,6 +45,7 @@ type AlternateBuffer struct {
 	tuiText                       string
 	tabCount                      int
 	rc                            *RequestContent
+	scs                           bool
 }
 
 func NewAlternateBuffer() *AlternateBuffer {
@@ -90,6 +78,7 @@ func NewAlternateBuffer() *AlternateBuffer {
 		t:        t,
 		rw:       rw,
 		rc:       &RequestContent{},
+		scs:      true,
 	}
 }
 
@@ -126,6 +115,8 @@ func (ab *AlternateBuffer) DrawTUI() {
 	ab.vPoint = ab.height / 4
 	ab.hPoint = int(float32(ab.width) / 3.3)
 
+	// TODO: 分割して関数で文字列を構築できるようにする。
+	// TODO: 枠と文字を色を変える。
 	ab.tuiText = fmt.Sprint(
 		"\x1b[", ab.vPoint+1, ";", ab.hPoint, "H", "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ HTTP REQUEST MESSAGE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
 		"\x1b[", ab.vPoint+2, ";", ab.hPoint, "H", "┃                                                                                                ┃",
@@ -155,13 +146,36 @@ func (ab *AlternateBuffer) DrawTUI() {
 		"\x1b[", ab.vPoint+23, ";", ab.hPoint, "H", "┃                                                                                                ┃",
 		"\x1b[", ab.vPoint+24, ";", ab.hPoint, "H", "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛",
 		"\x1b[", ab.vPoint+25, ";", ab.hPoint, "H", "                                                                                                  ",
-		"\x1b[", ab.vPoint+26, ";", ab.hPoint, "H", "                             ++++++++++++                xxxxxxxxxxxx                             ",
+		"\x1b[", ab.vPoint+26, ";", ab.hPoint, "H", "                                                                                                  ",
 		"\x1b[", ab.vPoint+27, ";", ab.hPoint, "H", "                             +   SEND   +                x  CANCEL  x                             ",
-		"\x1b[", ab.vPoint+28, ";", ab.hPoint, "H", "                             ++++++++++++                xxxxxxxxxxxx                             ",
 	)
 	fmt.Print(ab.tuiText)
 
 	ab.InputRequestContent(ab.vPoint, ab.hPoint)
+	ab.ReadEnter()
+}
+
+func (ab AlternateBuffer) resetInverseSendAndCancel() {
+	ab._resetInverseSend()
+	ab._resetInverseCancel()
+}
+
+func (ab AlternateBuffer) _resetInverseSend() {
+	ab._moveCursorSend()
+	fmt.Print("\x1b[27mSEND")
+}
+
+func (ab AlternateBuffer) _resetInverseCancel() {
+	ab._moveCursorCancel()
+	fmt.Print("\x1b[27mCANCEL")
+}
+
+func (ab AlternateBuffer) _visibleCursor() {
+	fmt.Print("\x1b[?25h")
+}
+
+func (ab AlternateBuffer) _hiddenCursor() {
+	fmt.Print("\x1b[?25l")
 }
 
 func (ab AlternateBuffer) RenderingRequestLine() {
@@ -185,6 +199,7 @@ func (ab AlternateBuffer) RenderingRequestBody() {
 }
 
 func (ab *AlternateBuffer) InputRequestContent(vPoint, hPoint int) {
+	ab._visibleCursor()
 	ab.InputRequestLine()
 	ab.InputRequestHeaderHost()
 	ab.InputRequestHeaderContentType()
@@ -263,6 +278,32 @@ func (ab AlternateBuffer) moveCursorRequestBody() {
 	ab.moveCursor(v, h)
 }
 
+func (ab AlternateBuffer) moveCursorSendOrCancel() {
+	ab._hiddenCursor()
+	ab.resetInverseSendAndCancel()
+	if ab.scs == true {
+		ab._moveCursorSend()
+		fmt.Print("\x1b[7mSEND")
+	} else {
+		ab._moveCursorCancel()
+		fmt.Print("\x1b[7mCANCEL")
+	}
+}
+
+func (ab AlternateBuffer) _moveCursorSend() {
+	v := ab.vPoint + 26
+	h := ab.hPoint + 32
+
+	ab.moveCursor(v, h)
+}
+
+func (ab AlternateBuffer) _moveCursorCancel() {
+	v := ab.vPoint + 26
+	h := ab.hPoint + 59
+
+	ab.moveCursor(v, h)
+}
+
 func (ab AlternateBuffer) moveCursor(vPoint, hPoint int) {
 	ab.t.Write([]byte(Home))
 
@@ -324,11 +365,48 @@ func (ab AlternateBuffer) RenderingRequestContent(esc uint8, buffer *[]byte) {
 	}
 }
 
+func (ab *AlternateBuffer) _renderingBuffer(esc uint8, buffer *[]byte) {
+	if esc == Backspace || esc == CtrlH || esc == CtrlU {
+		ab.rw.remover(esc, buffer)
+		ab._inputRequestField(buffer)
+	} else {
+		ab.rw.adder(esc, buffer)
+		ab._inputRequestField(buffer)
+	}
+}
+
 // TUIテキストを再レンダリングする
 func (ab AlternateBuffer) _reRenderingTUIText() {
 	fmt.Print(Clear)
 	fmt.Print(ab.tuiText)
 
+}
+
+func (ab *AlternateBuffer) ReadEnter() {
+	ab.moveCursorSendOrCancel()
+
+	r := make([]byte, 1)
+	for {
+		i, err := ab.rw.Read(r)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		if i == 0 {
+			os.Exit(1)
+		}
+
+		esc := r[0]
+		if esc == Tab {
+			ab.scs = !ab.scs
+			ab.moveCursorSendOrCancel()
+		}
+
+		if esc == Enter {
+			break
+		}
+	}
 }
 
 func (ab *AlternateBuffer) ReadLine() {
@@ -348,7 +426,6 @@ func (ab *AlternateBuffer) ReadLine() {
 				ab.tabCount += 1
 				break
 			}
-			break
 		}
 
 		if esc == Enter {
@@ -360,25 +437,20 @@ func (ab *AlternateBuffer) ReadLine() {
 	}
 }
 
-func (ab *AlternateBuffer) _renderingBuffer(esc uint8, buffer *[]byte) {
-	if esc == Backspace || esc == CtrlH || esc == CtrlU {
-		ab.rw.remover(esc, buffer)
-		ab._inputRequestField(buffer)
-	} else {
-		ab.rw.adder(esc, buffer)
-		ab._inputRequestField(buffer)
-	}
-}
-
 func (rw TerminalReadWriter) remover(esc uint8, buffer *[]byte) {
-	// FIX: まずbufferのlenを確認する必要がある。
+	l := len(*buffer)
+
+	if l == 0 {
+		return
+	}
+
 	if esc == Backspace || esc == CtrlH {
 		rw._remover(buffer)
 		return
 	}
 
 	if esc == CtrlU {
-		for i := 0; i < len(*buffer); i++ {
+		for i := 0; i < l; i++ {
 			rw._remover(buffer)
 		}
 		return
